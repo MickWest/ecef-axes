@@ -11,6 +11,8 @@ const AXIS_DEFS = [
 ];
 
 const params = {
+  backgroundColor: '#0b0f18',
+
   axisLength: 1.75,
   shaftRadius: 0.02,
   shaftSides: 18,
@@ -37,6 +39,28 @@ const params = {
   showLabels: true,
   labelOffset: 0.18,
   labelScale: 0.34,
+
+  cutawayEnabled: false,
+  cutawayCapRadiusScale: 0.999,
+  cutawayCapSegments: 72,
+  cutawayCapOpacity: 1.0,
+  cutawayShowCore: true,
+  cutawayCoreRadius: 0.24,
+  cutawayCoreOpacity: 1.0,
+  cutawayCoreColor: '#f4c860',
+  cutawayCoreEmissive: '#8a3f08',
+  cutawayCoreEmissiveIntensity: 0.45,
+
+  exportScale: 1,
+  exportTransparentBg: false,
+  exportFilenameBase: 'ecef-viewport',
+  exportNow: () => {},
+};
+
+const ECEF_BASIS = {
+  x: ecefToWorld(new THREE.Vector3(1, 0, 0)).normalize(),
+  y: ecefToWorld(new THREE.Vector3(0, 1, 0)).normalize(),
+  z: ecefToWorld(new THREE.Vector3(0, 0, 1)).normalize(),
 };
 
 function ecefFromLatLon(latDeg, lonDeg, radius = R) {
@@ -65,7 +89,7 @@ function disposeMaterial(material) {
   if (!material) {
     return;
   }
-  if (material.map) {
+  if (material.map && !material.userData.keepMapAlive) {
     material.map.dispose();
   }
   material.dispose();
@@ -235,11 +259,111 @@ function makePrimeMeridianRing(p) {
   return primeMeridian;
 }
 
+function makeCrossSectionTexture(maxAnisotropy = 1) {
+  const size = 1024;
+  const canvas = document.createElement('canvas');
+  canvas.width = size;
+  canvas.height = size;
+
+  const ctx = canvas.getContext('2d');
+  const cx = size * 0.5;
+  const cy = size * 0.5;
+  const radius = size * 0.5;
+
+  const layers = [
+    { ratio: 1.0, color: '#9b6a4f' },   // crust rim
+    { ratio: 0.94, color: '#c6885e' },  // upper mantle
+    { ratio: 0.78, color: '#de9f6f' },  // lower mantle
+    { ratio: 0.52, color: '#d67745' },  // transition
+    { ratio: 0.35, color: '#f1b652' },  // outer core
+    { ratio: 0.19, color: '#f7dd84' },  // inner core
+  ];
+
+  for (const layer of layers) {
+    ctx.fillStyle = layer.color;
+    ctx.beginPath();
+    ctx.arc(cx, cy, radius * layer.ratio, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  ctx.strokeStyle = 'rgba(60, 25, 10, 0.18)';
+  ctx.lineWidth = 4;
+  for (let i = 0; i < 28; i += 1) {
+    const ringRadius = radius * (0.25 + (i / 28) * 0.72);
+    ctx.beginPath();
+    ctx.arc(cx, cy, ringRadius, 0, Math.PI * 2);
+    ctx.stroke();
+  }
+
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  texture.anisotropy = maxAnisotropy;
+  return texture;
+}
+
+function makeQuarterDiskSegment(radius, dirA, dirB, segments, material) {
+  const segmentCount = Math.max(8, Math.round(segments));
+  const normal = new THREE.Vector3().crossVectors(dirA, dirB).normalize();
+
+  const positions = [0, 0, 0];
+  const normals = [normal.x, normal.y, normal.z];
+  const uvs = [0.5, 0.5];
+  const indices = [];
+
+  for (let i = 0; i <= segmentCount; i += 1) {
+    const t = (i / segmentCount) * (Math.PI * 0.5);
+    const c = Math.cos(t);
+    const s = Math.sin(t);
+
+    const px = (dirA.x * c + dirB.x * s) * radius;
+    const py = (dirA.y * c + dirB.y * s) * radius;
+    const pz = (dirA.z * c + dirB.z * s) * radius;
+
+    positions.push(px, py, pz);
+    normals.push(normal.x, normal.y, normal.z);
+    uvs.push(0.5 + 0.5 * c, 0.5 + 0.5 * s);
+
+    if (i > 0) {
+      indices.push(0, i, i + 1);
+    }
+  }
+
+  const geometry = new THREE.BufferGeometry();
+  geometry.setIndex(indices);
+  geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+  geometry.setAttribute('normal', new THREE.Float32BufferAttribute(normals, 3));
+  geometry.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
+
+  return new THREE.Mesh(geometry, material);
+}
+
+function makeOctantCutawayPlanes(frameRoot) {
+  const worldQuat = frameRoot.getWorldQuaternion(new THREE.Quaternion());
+  const axesWorld = [
+    ECEF_BASIS.x.clone().applyQuaternion(worldQuat).normalize(),
+    ECEF_BASIS.y.clone().applyQuaternion(worldQuat).normalize(),
+    ECEF_BASIS.z.clone().applyQuaternion(worldQuat).normalize(),
+  ];
+
+  return axesWorld.map((axis) => new THREE.Plane(axis.clone().negate(), 0));
+}
+
+function timestampForFilename() {
+  const d = new Date();
+  const yyyy = d.getFullYear();
+  const mm = String(d.getMonth() + 1).padStart(2, '0');
+  const dd = String(d.getDate()).padStart(2, '0');
+  const hh = String(d.getHours()).padStart(2, '0');
+  const min = String(d.getMinutes()).padStart(2, '0');
+  const sec = String(d.getSeconds()).padStart(2, '0');
+  return `${yyyy}${mm}${dd}-${hh}${min}${sec}`;
+}
+
 export function initECEFDemo(container) {
   const mount = container ?? document.body;
 
   const scene = new THREE.Scene();
-  scene.background = new THREE.Color(0x0b0f18);
+  scene.background = new THREE.Color(params.backgroundColor);
 
   const camera = new THREE.PerspectiveCamera(
     45,
@@ -256,6 +380,7 @@ export function initECEFDemo(container) {
   const renderer = new THREE.WebGLRenderer({ antialias: true });
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
   renderer.setSize(mount.clientWidth, mount.clientHeight);
+  renderer.localClippingEnabled = true;
   mount.appendChild(renderer.domElement);
 
   const controls = new OrbitControls(camera, renderer.domElement);
@@ -278,20 +403,22 @@ export function initECEFDemo(container) {
   frameRoot.rotation.y = -Math.PI * 0.5;
   scene.add(frameRoot);
 
-  const earth = new THREE.Mesh(
-    new THREE.SphereGeometry(R, 64, 48),
-    new THREE.MeshStandardMaterial({
-      color: 0xffffff,
-      map: earthTexture,
-      roughness: 0.85,
-      metalness: 0.0,
-    })
-  );
+  const earthMaterial = new THREE.MeshStandardMaterial({
+    color: 0xffffff,
+    map: earthTexture,
+    roughness: 0.85,
+    metalness: 0.0,
+  });
+  const earth = new THREE.Mesh(new THREE.SphereGeometry(R, 64, 48), earthMaterial);
   earth.renderOrder = 1;
   frameRoot.add(earth);
 
   const dynamicRoot = new THREE.Group();
   frameRoot.add(dynamicRoot);
+
+  const cutawayRoot = new THREE.Group();
+  frameRoot.add(cutawayRoot);
+  const crossSectionTexture = makeCrossSectionTexture(renderer.capabilities.getMaxAnisotropy());
 
   function rebuildDynamicContent() {
     clearGroup(dynamicRoot);
@@ -322,9 +449,179 @@ export function initECEFDemo(container) {
     }
   }
 
-  rebuildDynamicContent();
+  function rebuildCutawayContent() {
+    clearGroup(cutawayRoot);
+
+    earthMaterial.clippingPlanes = [];
+    earthMaterial.clipIntersection = false;
+    earthMaterial.needsUpdate = true;
+
+    if (!params.cutawayEnabled) {
+      return;
+    }
+
+    earthMaterial.clippingPlanes = makeOctantCutawayPlanes(frameRoot);
+    earthMaterial.clipIntersection = true;
+    earthMaterial.needsUpdate = true;
+
+    const capRadius = R * params.cutawayCapRadiusScale;
+    const capSegments = params.cutawayCapSegments;
+
+    function createCapMaterial() {
+      const material = new THREE.MeshStandardMaterial({
+        color: 0xffffff,
+        map: crossSectionTexture,
+        transparent: true,
+        opacity: params.cutawayCapOpacity,
+        roughness: 0.85,
+        metalness: 0.0,
+        side: THREE.DoubleSide,
+      });
+      material.userData.keepMapAlive = true;
+      return material;
+    }
+
+    // Cap for plane x=0, covering the removed (+y,+z) quarter.
+    const capX = makeQuarterDiskSegment(
+      capRadius,
+      ECEF_BASIS.y,
+      ECEF_BASIS.z,
+      capSegments,
+      createCapMaterial()
+    );
+    capX.renderOrder = 2;
+    cutawayRoot.add(capX);
+
+    // Cap for plane y=0, covering the removed (+x,+z) quarter.
+    const capY = makeQuarterDiskSegment(
+      capRadius,
+      ECEF_BASIS.z,
+      ECEF_BASIS.x,
+      capSegments,
+      createCapMaterial()
+    );
+    capY.renderOrder = 2;
+    cutawayRoot.add(capY);
+
+    // Cap for plane z=0, covering the removed (+x,+y) quarter.
+    const capZ = makeQuarterDiskSegment(
+      capRadius,
+      ECEF_BASIS.x,
+      ECEF_BASIS.y,
+      capSegments,
+      createCapMaterial()
+    );
+    capZ.renderOrder = 2;
+    cutawayRoot.add(capZ);
+
+    if (params.cutawayShowCore) {
+      const core = new THREE.Mesh(
+        new THREE.SphereGeometry(params.cutawayCoreRadius, 48, 36),
+        new THREE.MeshStandardMaterial({
+          color: params.cutawayCoreColor,
+          transparent: true,
+          opacity: params.cutawayCoreOpacity,
+          roughness: 0.45,
+          metalness: 0.05,
+          emissive: params.cutawayCoreEmissive,
+          emissiveIntensity: params.cutawayCoreEmissiveIntensity,
+        })
+      );
+      core.renderOrder = 2;
+      cutawayRoot.add(core);
+    }
+  }
+
+  function rebuildAll() {
+    rebuildDynamicContent();
+    rebuildCutawayContent();
+  }
+
+  function applyBackgroundColor() {
+    scene.background = new THREE.Color(params.backgroundColor);
+  }
+
+  function captureViewportPNG(options = {}) {
+    const scale = options.scale ?? params.exportScale;
+    const transparent = options.transparent ?? params.exportTransparentBg;
+    const targetWidth = Math.max(1, Math.round(mount.clientWidth * scale));
+    const targetHeight = Math.max(1, Math.round(mount.clientHeight * scale));
+
+    const previousBackground = scene.background;
+    const previousTarget = renderer.getRenderTarget();
+    const previousXrEnabled = renderer.xr.enabled;
+    const previousClearColor = new THREE.Color();
+    renderer.getClearColor(previousClearColor);
+    const previousClearAlpha = renderer.getClearAlpha();
+
+    const renderTarget = new THREE.WebGLRenderTarget(targetWidth, targetHeight, {
+      depthBuffer: true,
+      stencilBuffer: false,
+    });
+    renderTarget.texture.colorSpace = THREE.SRGBColorSpace;
+
+    renderer.xr.enabled = false;
+    if (transparent) {
+      scene.background = null;
+      renderer.setClearColor(0x000000, 0);
+    } else {
+      applyBackgroundColor();
+    }
+
+    renderer.setRenderTarget(renderTarget);
+    renderer.render(scene, camera);
+
+    const pixels = new Uint8Array(targetWidth * targetHeight * 4);
+    renderer.readRenderTargetPixels(renderTarget, 0, 0, targetWidth, targetHeight, pixels);
+
+    renderer.setRenderTarget(previousTarget);
+    renderer.xr.enabled = previousXrEnabled;
+    scene.background = previousBackground;
+    renderer.setClearColor(previousClearColor, previousClearAlpha);
+    renderTarget.dispose();
+
+    const rowBytes = targetWidth * 4;
+    const flipped = new Uint8ClampedArray(pixels.length);
+    for (let y = 0; y < targetHeight; y += 1) {
+      const srcOffset = (targetHeight - 1 - y) * rowBytes;
+      const dstOffset = y * rowBytes;
+      flipped.set(pixels.subarray(srcOffset, srcOffset + rowBytes), dstOffset);
+    }
+
+    const outputCanvas = document.createElement('canvas');
+    outputCanvas.width = targetWidth;
+    outputCanvas.height = targetHeight;
+    const ctx = outputCanvas.getContext('2d');
+    const imageData = new ImageData(flipped, targetWidth, targetHeight);
+    ctx.putImageData(imageData, 0, 0);
+
+    return outputCanvas.toDataURL('image/png');
+  }
+
+  function exportViewportPNG(options = {}) {
+    const shouldDownload = options.download ?? true;
+    const fileBase = options.fileBase ?? params.exportFilenameBase;
+    const dataUrl = captureViewportPNG(options);
+
+    if (shouldDownload) {
+      const a = document.createElement('a');
+      a.href = dataUrl;
+      a.download = `${fileBase}-${timestampForFilename()}.png`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+    }
+    return dataUrl;
+  }
+
+  params.exportNow = () => {
+    exportViewportPNG();
+  };
+
+  rebuildAll();
 
   const gui = new GUI({ title: 'ECEF Controls' });
+  gui.addColor(params, 'backgroundColor').name('Background').onChange(applyBackgroundColor);
 
   const arrowsFolder = gui.addFolder('Arrows');
   arrowsFolder.add(params, 'axisLength', 0.5, 3.0, 0.01).name('Length').onChange(rebuildDynamicContent);
@@ -361,6 +658,33 @@ export function initECEFDemo(container) {
   labelsFolder.add(params, 'labelOffset', 0.02, 0.8, 0.01).name('Offset').onChange(rebuildDynamicContent);
   labelsFolder.add(params, 'labelScale', 0.08, 0.7, 0.01).name('Scale').onChange(rebuildDynamicContent);
 
+  const cutawayFolder = gui.addFolder('Cutaway');
+  cutawayFolder.add(params, 'cutawayEnabled').name('Enable').onChange(rebuildCutawayContent);
+  cutawayFolder.add(params, 'cutawayCapRadiusScale', 0.97, 1.002, 0.0005).name('Cap radius').onChange(rebuildCutawayContent);
+  cutawayFolder.add(params, 'cutawayCapSegments', 12, 160, 1).name('Cap detail').onChange(rebuildCutawayContent);
+  cutawayFolder.add(params, 'cutawayCapOpacity', 0.1, 1.0, 0.01).name('Cap opacity').onChange(rebuildCutawayContent);
+  cutawayFolder.add(params, 'cutawayShowCore').name('Show core').onChange(rebuildCutawayContent);
+  cutawayFolder.add(params, 'cutawayCoreRadius', 0.06, 0.45, 0.005).name('Core radius').onChange(rebuildCutawayContent);
+  cutawayFolder.add(params, 'cutawayCoreOpacity', 0.1, 1.0, 0.01).name('Core opacity').onChange(rebuildCutawayContent);
+  cutawayFolder.addColor(params, 'cutawayCoreColor').name('Core color').onChange(rebuildCutawayContent);
+  cutawayFolder.addColor(params, 'cutawayCoreEmissive').name('Core glow').onChange(rebuildCutawayContent);
+  cutawayFolder.add(params, 'cutawayCoreEmissiveIntensity', 0.0, 2.0, 0.01).name('Core glow int').onChange(rebuildCutawayContent);
+
+  const exportFolder = gui.addFolder('Export');
+  exportFolder.add(params, 'exportScale', 0.5, 6.0, 0.25).name('Resolution x');
+  exportFolder.add(params, 'exportTransparentBg').name('Transparent bg');
+  exportFolder.add(params, 'exportFilenameBase').name('Filename');
+  exportFolder.add(params, 'exportNow').name('Export PNG');
+
+  arrowsFolder.close();
+  occlusionFolder.close();
+  equatorFolder.close();
+  primeFolder.close();
+  markersFolder.close();
+  labelsFolder.close();
+  cutawayFolder.close();
+  exportFolder.close();
+
   function onResize() {
     const width = mount.clientWidth;
     const height = mount.clientHeight;
@@ -386,15 +710,21 @@ export function initECEFDemo(container) {
     controls,
     gui,
     params,
-    rebuild: rebuildDynamicContent,
+    rebuild: rebuildAll,
+    captureViewportPNG,
+    exportViewportPNG,
     dispose() {
       cancelAnimationFrame(rafId);
       window.removeEventListener('resize', onResize);
       gui.destroy();
       controls.dispose();
 
+      clearGroup(cutawayRoot);
       clearGroup(dynamicRoot);
+      earthMaterial.clippingPlanes = [];
+      earthMaterial.clipIntersection = false;
       disposeObject3D(earth);
+      crossSectionTexture.dispose();
 
       renderer.dispose();
       if (renderer.domElement.parentNode === mount) {
@@ -406,5 +736,5 @@ export function initECEFDemo(container) {
 
 const autoMount = document.getElementById('ecef-demo');
 if (autoMount) {
-  initECEFDemo(autoMount);
+  window.__ecefDemo = initECEFDemo(autoMount);
 }
