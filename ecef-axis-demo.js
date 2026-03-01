@@ -5,9 +5,9 @@ import GUI from 'https://cdn.jsdelivr.net/npm/lil-gui@0.19/+esm';
 const R = 1;
 
 const AXIS_DEFS = [
-  { key: '+X', color: 0xff4d4d, dir: worldFromLatLonECEF(0, 0) },
-  { key: '+Y', color: 0x3ecf6d, dir: worldFromLatLonECEF(0, 90) },
-  { key: '+Z', color: 0x4fa3ff, dir: worldFromLatLonECEF(90, 0) },
+  { key: 'X', color: 0xff4d4d, dir: worldFromLatLonECEF(0, 0) },
+  { key: 'Y', color: 0x3ecf6d, dir: worldFromLatLonECEF(0, 90) },
+  { key: 'Z', color: 0x4fa3ff, dir: worldFromLatLonECEF(90, 0) },
 ];
 
 const params = {
@@ -37,6 +37,7 @@ const params = {
   markerOffset: 1.002,
 
   showLabels: true,
+  labelShowPlus: false,
   labelOffset: 0.18,
   labelScale: 0.34,
 
@@ -444,7 +445,8 @@ export function initECEFDemo(container) {
 
       if (params.showLabels) {
         const labelPos = axisDef.dir.clone().setLength(params.axisLength + params.labelOffset);
-        dynamicRoot.add(makeAxisLabel(axisDef.key, axisDef.color, labelPos, params.labelScale));
+        const labelText = `${params.labelShowPlus ? '+' : ''}${axisDef.key}`;
+        dynamicRoot.add(makeAxisLabel(labelText, axisDef.color, labelPos, params.labelScale));
       }
     }
   }
@@ -655,6 +657,7 @@ export function initECEFDemo(container) {
 
   const labelsFolder = gui.addFolder('Labels');
   labelsFolder.add(params, 'showLabels').name('Show').onChange(rebuildDynamicContent);
+  labelsFolder.add(params, 'labelShowPlus').name('Show + sign').onChange(rebuildDynamicContent);
   labelsFolder.add(params, 'labelOffset', 0.02, 0.8, 0.01).name('Offset').onChange(rebuildDynamicContent);
   labelsFolder.add(params, 'labelScale', 0.08, 0.7, 0.01).name('Scale').onChange(rebuildDynamicContent);
 

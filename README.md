@@ -1,4 +1,4 @@
-# ECEF Axis Demo (Three.js)
+# ecef-axes
 
 Minimal Three.js ECEF visualization with:
 
@@ -8,6 +8,16 @@ Minimal Three.js ECEF visualization with:
 - Equator and Prime Meridian rings
 - Emergence markers and axis labels
 - `lil-gui` controls for geometry and display parameters
+
+## Screenshots
+
+Without cutaway:
+
+![ECEF globe without cutaway](./ecef-cutaway-off-preview.png)
+
+With cutaway:
+
+![ECEF globe with cutaway](./ecef-cutaway-preview.png)
 
 ## Run
 
