@@ -31,6 +31,10 @@ Open:
 
 - [http://127.0.0.1:8081/index.html](http://127.0.0.1:8081/index.html)
 
+## Exporting PNGs
+
+Use the `Export` folder in the GUI to save viewport images as PNG files. `Resolution x` renders to a higher-resolution off-screen target, `Transparent bg` exports with alpha, and `Filename` sets the base output name. The export captures only the 3D viewport (not the GUI overlay). The top-level `Background` color control affects non-transparent exports.
+
 ## Files
 
 - `index.html`
